@@ -1,4 +1,4 @@
-name: Manual Hotel Rate Check
+name: Multi-Date Hotel Rate Check
 on:
   workflow_dispatch:
     inputs:
@@ -10,6 +10,16 @@ on:
         description: 'Check-out date (YYYY-MM-DD)'
         required: true
         default: '2025-06-02'
+      date_range:
+        description: 'Number of consecutive dates to check'
+        required: true
+        type: choice
+        default: '1'
+        options:
+          - '1'
+          - '3'
+          - '5'
+          - '7'
 
 jobs:
   scrape-rates:
@@ -27,17 +37,18 @@ jobs:
           npm install
           npx playwright install chromium
           
-      - name: Run rate scraper
+      - name: Run multi-date rate scraper
         env:
           GOOGLE_SERVICE_ACCOUNT_EMAIL: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_EMAIL }}
           GOOGLE_PRIVATE_KEY: ${{ secrets.GOOGLE_PRIVATE_KEY }}
           GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
           CHECK_IN: ${{ github.event.inputs.check_in }}
           CHECK_OUT: ${{ github.event.inputs.check_out }}
+          DATE_RANGE: ${{ github.event.inputs.date_range }}
         run: node scraper.js
         
       - name: Upload results
         uses: actions/upload-artifact@v4
         with:
-          name: rate-results
+          name: multi-date-rate-results
           path: results.json
