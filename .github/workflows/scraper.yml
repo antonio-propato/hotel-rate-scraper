@@ -1,34 +1,41 @@
-name: Hotel Rate Scraper
-
+name: Manual Hotel Rate Check
 on:
-  schedule:
-    - cron: '0 6 * * *'
   workflow_dispatch:
+    inputs:
+      check_in:
+        description: 'Check-in date (YYYY-MM-DD)'
+        required: true
+        default: '2025-06-01'
+      check_out:
+        description: 'Check-out date (YYYY-MM-DD)'
+        required: true
+        default: '2025-06-02'
 
 jobs:
-  scrape-hotel-rates:
+  scrape-rates:
     runs-on: ubuntu-latest
-    
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - uses: actions/checkout@v3
       
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: '18'
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          
+      - name: Install dependencies
+        run: |
+          npm install
+          npx playwright install chromium
+          
+      - name: Run rate scraper
+        env:
+          GOOGLE_SERVICE_ACCOUNT_EMAIL: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_EMAIL }}
+          GOOGLE_PRIVATE_KEY: ${{ secrets.GOOGLE_PRIVATE_KEY }}
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+        run: node scraper.js
         
-    - name: Install Playwright
-      run: |
-        npm install playwright
-        npx playwright install chromium
-        
-    - name: Run hotel scraper
-      run: node scraper.js
-      
-    - name: Upload results
-      uses: actions/upload-artifact@v4
-      with:
-        name: hotel-rates-${{ github.run_number }}
-        path: results.json
-        retention-days: 30
+      - name: Upload results
+        uses: actions/upload-artifact@v3
+        with:
+          name: rate-results
+          path: results.json
