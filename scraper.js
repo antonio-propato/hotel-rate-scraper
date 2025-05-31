@@ -181,10 +181,47 @@ async function scrapeBookingCom(page, checkIn, checkOut) {
     await page.waitForTimeout(5000);
     await simulateHumanBehavior(page);
     
-    // Wait for room table to load
-    await page.waitForTimeout(8000);
+    // Look for "Info & prices" or similar section and click it
+    console.log('🔍 Looking for room pricing section...');
     
-    // DEBUG: Check what's actually on the page
+    try {
+      // Try to click on "Info & prices" or availability section
+      const priceButtons = [
+        'a[href*="prices"]',
+        'button:has-text("Info & prices")',
+        'a:has-text("Info & prices")',
+        'button:has-text("Availability")',
+        'a:has-text("Availability")',
+        '[data-testid*="availability"]'
+      ];
+      
+      for (const selector of priceButtons) {
+        try {
+          await page.click(selector, { timeout: 3000 });
+          console.log(`✅ Clicked on pricing section: ${selector}`);
+          await page.waitForTimeout(3000);
+          break;
+        } catch (e) {
+          // Continue to next selector
+        }
+      }
+    } catch (e) {
+      console.log('⚠️ Could not find pricing section button');
+    }
+    
+    // Wait for room pricing table to load
+    console.log('⏳ Waiting for room pricing table...');
+    await page.waitForTimeout(10000);
+    
+    // Try scrolling to trigger lazy loading
+    await page.evaluate(() => {
+      window.scrollTo(0, 1000);
+      window.scrollTo(0, 2000);
+      window.scrollTo(0, 1500);
+    });
+    
+    await page.waitForTimeout(3000);
+    
     console.log('🔍 Debugging Booking.com page content...');
     
     const pageInfo = await page.evaluate(() => {
@@ -192,131 +229,144 @@ async function scrapeBookingCom(page, checkIn, checkOut) {
         title: document.title,
         url: window.location.href,
         bodyTextLength: document.body.innerText.length,
-        bodyTextPreview: document.body.innerText.substring(0, 500),
+        bodyTextPreview: document.body.innerText.substring(0, 1000),
         allLinksCount: document.querySelectorAll('a').length,
-        roomRelatedText: document.body.innerText.toLowerCase().includes('room') || 
-                        document.body.innerText.toLowerCase().includes('studio'),
-        pricesFound: (document.body.innerText.match(/£\s*\d{3,4}/g) || []).slice(0, 10),
-        hasRoomAvailability: document.body.innerText.toLowerCase().includes('availability')
+        roomRelatedText: document.body.innerText.toLowerCase().includes('room'),
+        pricesFound: (document.body.innerText.match(/£\s*\d{3,4}/g) || []).slice(0, 15),
+        hasRoomAvailability: document.body.innerText.toLowerCase().includes('availability'),
+        hasPricingTable: document.body.innerText.toLowerCase().includes('today') && 
+                        document.body.innerText.toLowerCase().includes('price'),
+        tableElements: document.querySelectorAll('table, tbody, .room-table, [class*="price"]').length
       };
     });
     
-    console.log('📊 Page Debug Info:');
+    console.log('📊 Enhanced Page Debug Info:');
     console.log(`  Title: ${pageInfo.title}`);
     console.log(`  URL: ${pageInfo.url}`);
     console.log(`  Body text length: ${pageInfo.bodyTextLength}`);
     console.log(`  Has room-related text: ${pageInfo.roomRelatedText}`);
     console.log(`  Has availability text: ${pageInfo.hasRoomAvailability}`);
+    console.log(`  Has pricing table: ${pageInfo.hasPricingTable}`);
+    console.log(`  Table elements found: ${pageInfo.tableElements}`);
     console.log(`  Prices found: ${pageInfo.pricesFound.join(', ')}`);
     console.log(`  Body preview: ${pageInfo.bodyTextPreview}`);
-    
-    // If the page doesn't seem to have room content, wait longer
-    if (!pageInfo.roomRelatedText || pageInfo.bodyTextLength < 1000) {
-      console.log('⏳ Page seems incomplete, waiting longer...');
-      await page.waitForTimeout(10000);
-      
-      // Try scrolling to trigger content loading
-      await page.evaluate(() => {
-        window.scrollTo(0, 500);
-        window.scrollTo(0, 1000);
-        window.scrollTo(0, 0);
-      });
-      
-      await page.waitForTimeout(5000);
-    }
     
     const rates = await page.evaluate(() => {
       const results = [];
       
-      console.log('🔍 Starting comprehensive Booking.com extraction...');
+      console.log('🔍 Starting enhanced Booking.com extraction...');
       
       // Get all text content
-      const allText = document.body.innerText.toLowerCase();
+      const allText = document.body.innerText;
       
-      // Look for specific patterns that should be on a Booking.com hotel page
-      const hasAvailability = allText.includes('availability');
-      const hasRooms = allText.includes('room');
-      const hasBooking = allText.includes('booking');
-      const hasPrices = /£\s*\d{3,4}/.test(document.body.innerText);
+      // Extract ALL prices from the page (not just first 10)
+      const allPricesText = document.body.innerText.match(/£\s*(\d{3,4})/g) || [];
+      const allPrices = allPricesText.map(p => parseInt(p.replace(/[£,\s]/g, '')))
+                                   .filter(p => p >= 200 && p <= 3000); // Reasonable hotel price range
       
-      console.log('Page content check:');
-      console.log(`  Has "availability": ${hasAvailability}`);
-      console.log(`  Has "room": ${hasRooms}`);
-      console.log(`  Has "booking": ${hasBooking}`);
-      console.log(`  Has prices: ${hasPrices}`);
+      console.log('All reasonable prices found:', allPrices);
       
-      // If this doesn't look like a proper Booking.com room page, return empty
-      if (!hasRooms && !hasPrices) {
-        console.log('❌ Page does not contain expected room/price content');
+      // Remove the £100 and other unrealistic prices
+      const validPrices = allPrices.filter(p => p >= 300);
+      console.log('Valid prices (£300+):', validPrices);
+      
+      // If we don't have enough valid prices, the page might not have loaded properly
+      if (validPrices.length === 0) {
+        console.log('❌ No valid prices found - page may not have room pricing loaded');
         return [];
       }
       
-      // Extract all prices from the page
-      const allPricesText = document.body.innerText.match(/£\s*(\d{3,4})/g) || [];
-      const allPrices = allPricesText.map(p => parseInt(p.replace(/[£,\s]/g, '')));
-      console.log('All numeric prices found:', allPrices);
-      
-      // Look for room type indicators in the text
-      const roomIndicators = [
-        { name: 'Double Room', patterns: ['double room', 'double bed'] },
-        { name: 'Standard Studio', patterns: ['standard studio', 'studio standard'] },
-        { name: 'Studio with Terrace', patterns: ['studio with terrace', 'terrace studio'] },
-        { name: 'Quadruple Room', patterns: ['quadruple room', 'quadruple', 'quad room'] },
-        { name: 'Suite', patterns: ['suite'] }
+      // Look for room type indicators and try to match with appropriate prices
+      const roomData = [
+        { 
+          name: 'Double Room', 
+          patterns: ['double room', 'double bed'], 
+          expectedPriceRange: [400, 500] 
+        },
+        { 
+          name: 'Standard Studio', 
+          patterns: ['standard studio', 'studio standard'], 
+          expectedPriceRange: [700, 900] 
+        },
+        { 
+          name: 'Studio with Terrace', 
+          patterns: ['studio with terrace', 'terrace studio'], 
+          expectedPriceRange: [1500, 2000] 
+        },
+        { 
+          name: 'Quadruple Room', 
+          patterns: ['quadruple room', 'quadruple', 'quad room'], 
+          expectedPriceRange: [800, 900] 
+        }
       ];
       
-      roomIndicators.forEach(room => {
-        const found = room.patterns.some(pattern => allText.includes(pattern));
+      const lowerText = allText.toLowerCase();
+      
+      roomData.forEach(room => {
+        const found = room.patterns.some(pattern => lowerText.includes(pattern));
         if (found) {
           console.log(`✅ Found text indicator for: ${room.name}`);
           
-          // Try to find a reasonable price for this room type
-          if (allPrices.length > 0) {
-            // Use some heuristics based on typical pricing
-            let estimatedPrice = allPrices[0]; // default to first price found
-            
-            if (room.name.includes('Double')) estimatedPrice = allPrices.find(p => p >= 400 && p <= 500) || allPrices[0];
-            else if (room.name.includes('Studio') && room.name.includes('Terrace')) estimatedPrice = allPrices.find(p => p >= 1500) || allPrices[0];
-            else if (room.name.includes('Studio')) estimatedPrice = allPrices.find(p => p >= 700 && p <= 900) || allPrices[0];
-            else if (room.name.includes('Quadruple')) estimatedPrice = allPrices.find(p => p >= 800 && p <= 900) || allPrices[0];
-            
-            if (estimatedPrice) {
-              results.push({
-                ota: 'Booking.com',
-                roomName: room.name,
-                price: estimatedPrice,
-                currency: 'GBP',
-                source: 'booking-text-analysis'
-              });
+          // Try to find a price that fits the expected range
+          let bestPrice = null;
+          
+          // First, look for prices in the expected range
+          for (const price of validPrices) {
+            if (price >= room.expectedPriceRange[0] && price <= room.expectedPriceRange[1]) {
+              bestPrice = price;
+              break;
             }
+          }
+          
+          // If no price in expected range, use the closest valid price
+          if (!bestPrice && validPrices.length > 0) {
+            const midRange = (room.expectedPriceRange[0] + room.expectedPriceRange[1]) / 2;
+            bestPrice = validPrices.reduce((closest, price) => 
+              Math.abs(price - midRange) < Math.abs(closest - midRange) ? price : closest
+            );
+          }
+          
+          if (bestPrice) {
+            console.log(`Matched ${room.name} with price £${bestPrice}`);
+            results.push({
+              ota: 'Booking.com',
+              roomName: room.name,
+              price: bestPrice,
+              currency: 'GBP',
+              source: 'booking-smart-matching'
+            });
+            
+            // Remove this price so we don't reuse it
+            const priceIndex = validPrices.indexOf(bestPrice);
+            if (priceIndex > -1) validPrices.splice(priceIndex, 1);
           }
         } else {
           console.log(`❌ No text indicator found for: ${room.name}`);
         }
       });
       
-      // If we still have no results but have prices, create generic mappings
-      if (results.length === 0 && allPrices.length > 0) {
-        console.log('Using generic price mapping...');
+      // If we still have valid prices left and not enough rooms, create additional mappings
+      if (results.length < roomData.length && validPrices.length > 0) {
+        console.log('Creating additional mappings for remaining prices...');
         
-        // Sort prices and map to generic room types
-        const sortedPrices = [...new Set(allPrices)].sort((a, b) => a - b);
-        const genericRooms = ['Standard Room', 'Deluxe Room', 'Studio', 'Suite'];
+        const remainingRooms = roomData.filter(room => 
+          !results.some(r => r.roomName === room.name)
+        );
         
-        sortedPrices.slice(0, 4).forEach((price, index) => {
-          if (genericRooms[index]) {
+        remainingRooms.forEach((room, index) => {
+          if (validPrices[index]) {
             results.push({
               ota: 'Booking.com',
-              roomName: genericRooms[index],
-              price: price,
+              roomName: room.name,
+              price: validPrices[index],
               currency: 'GBP',
-              source: 'booking-generic-mapping'
+              source: 'booking-remaining-mapping'
             });
           }
         });
       }
       
-      console.log(`Booking.com extraction result: ${results.length} rooms`);
+      console.log(`Booking.com final extraction result: ${results.length} rooms`);
       results.forEach(r => console.log(`  ${r.roomName}: £${r.price} (${r.source})`));
       
       return results;
