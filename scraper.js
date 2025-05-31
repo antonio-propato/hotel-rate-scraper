@@ -187,94 +187,111 @@ async function scrapeBookingCom(page, checkIn, checkOut) {
     const rates = await page.evaluate(() => {
       const results = [];
       
-      // Strategy 1: Look for the room table structure from your screenshot
-      const roomRows = document.querySelectorAll('.hprt-table tbody tr, .rt-table tbody tr, [data-testid*="room-row"], .room-row');
-      console.log(`Found ${roomRows.length} room rows`);
+      // Strategy 1: Look for the specific Booking.com layout from your screenshot
+      // The rooms appear to be in a table with blue links for room types
+      const roomElements = document.querySelectorAll('tbody tr, .hprt-table tbody tr, .rt-table tbody tr');
+      console.log(`Found ${roomElements.length} potential room elements`);
       
-      roomRows.forEach((row, index) => {
+      roomElements.forEach((element, index) => {
         try {
-          // Room name - look for the blue link text
+          // Look for the blue room name links (like "Double Room", "Standard Studio")
           let roomName = null;
-          const nameSelectors = [
-            '.hprt-roomtype-icon-link',
-            '.roomtype-link', 
-            '.room-name-link',
-            'a[data-testid*="room"]',
-            '.room-link',
-            'a.room_link'
+          
+          // First try to find the blue link text
+          const linkSelectors = [
+            'a[href*="#availability"]',  // Booking.com room links often have #availability
+            'a.hprt-roomtype-icon-link',
+            'a.room-link',
+            'a[data-room-id]',
+            '.hprt-roomtype-icon-link'
           ];
           
-          for (const selector of nameSelectors) {
-            const nameEl = row.querySelector(selector);
-            if (nameEl) {
-              roomName = nameEl.textContent.trim();
+          for (const selector of linkSelectors) {
+            const linkEl = element.querySelector(selector);
+            if (linkEl && linkEl.textContent.trim()) {
+              roomName = linkEl.textContent.trim();
+              console.log(`Found room link: "${roomName}"`);
               break;
             }
           }
           
-          // If no link found, try headers and spans
+          // If no link found, try other room name elements
           if (!roomName) {
-            const fallbackSelectors = [
-              'h3', 'h4', '.room-name', '.roomtype-name', 
-              'span[data-testid*="name"]', '.room-type-name'
+            const nameSelectors = [
+              '.room-name',
+              '.roomtype-name', 
+              '.hprt-roomtype-name',
+              'h3',
+              'h4',
+              '[data-testid*="room"]'
             ];
             
-            for (const selector of fallbackSelectors) {
-              const nameEl = row.querySelector(selector);
+            for (const selector of nameSelectors) {
+              const nameEl = element.querySelector(selector);
               if (nameEl && nameEl.textContent.trim().length > 3) {
                 roomName = nameEl.textContent.trim();
+                console.log(`Found room name: "${roomName}"`);
                 break;
               }
             }
           }
           
-          // Price - look for the £ symbol and numbers
+          // Look for prices - Booking.com shows prices like £439, £799, etc.
           let price = null;
+          
+          // Try to find price elements
           const priceSelectors = [
             '.bui-price-display__value',
-            '.prco-valign-middle-helper',
+            '.prco-valign-middle-helper', 
+            '.bui-u-sr-only',
             '[data-testid*="price"]',
-            '.price-current',
-            '.room-price',
-            '.rate-price'
+            '.rate-price',
+            '.room-price'
           ];
           
           for (const selector of priceSelectors) {
-            const priceEl = row.querySelector(selector);
-            if (priceEl) {
-              // Look for £ followed by numbers
+            const priceElements = element.querySelectorAll(selector);
+            for (const priceEl of priceElements) {
               const priceText = priceEl.textContent;
-              const priceMatch = priceText.match(/£\s*(\d+(?:,\d+)?)/);
+              // Look for £ followed by 3 or 4 digits (like £439, £1849)
+              const priceMatch = priceText.match(/£\s*(\d{3,4})/);
               if (priceMatch) {
-                price = parseInt(priceMatch[1].replace(/,/g, ''));
-                break;
+                const foundPrice = parseInt(priceMatch[1]);
+                if (foundPrice >= 300 && foundPrice <= 3000) { // Reasonable price range
+                  price = foundPrice;
+                  console.log(`Found price: £${price} from "${priceText}"`);
+                  break;
+                }
               }
             }
+            if (price) break;
           }
           
-          // Also check all text in the row for price patterns
+          // If still no price, scan all text in the row
           if (!price) {
-            const allRowText = row.textContent;
-            const priceMatch = allRowText.match(/£\s*(\d+(?:,\d+)?)/);
-            if (priceMatch) {
-              const foundPrice = parseInt(priceMatch[1].replace(/,/g, ''));
-              if (foundPrice >= 100 && foundPrice <= 5000) {
-                price = foundPrice;
+            const allText = element.textContent;
+            const allPrices = allText.match(/£\s*(\d{3,4})/g);
+            if (allPrices) {
+              for (const priceStr of allPrices) {
+                const foundPrice = parseInt(priceStr.replace(/[£,\s]/g, ''));
+                if (foundPrice >= 300 && foundPrice <= 3000) {
+                  price = foundPrice;
+                  console.log(`Found price from text scan: £${price}`);
+                  break;
+                }
               }
             }
           }
           
           // Clean up room name
           if (roomName) {
-            // Remove common prefixes/suffixes
-            roomName = roomName.replace(/^View\s+/i, '');
-            roomName = roomName.replace(/\s+details$/i, '');
             roomName = roomName.replace(/^Room\s+type:\s*/i, '');
+            roomName = roomName.replace(/\s+details$/i, '');
             roomName = roomName.trim();
           }
           
-          // Validate and add the rate
-          if (roomName && price && price >= 100 && price <= 5000 && roomName.length > 3) {
+          // Only add if we have both room name and price
+          if (roomName && price && roomName.length > 2) {
             results.push({
               ota: 'Booking.com',
               roomName: roomName,
@@ -283,13 +300,54 @@ async function scrapeBookingCom(page, checkIn, checkOut) {
               source: 'booking-extracted'
             });
             
-            console.log(`Found room: ${roomName} - £${price}`);
+            console.log(`✅ Added: ${roomName} - £${price}`);
+          } else {
+            console.log(`❌ Skipped element ${index}: roomName="${roomName}", price=${price}`);
           }
           
         } catch (e) {
-          console.log(`Error processing Booking.com room ${index}:`, e.message);
+          console.log(`Error processing Booking.com element ${index}:`, e.message);
         }
       });
+      
+      // Strategy 2: Alternative approach - look for the specific room cards
+      if (results.length === 0) {
+        console.log('Trying alternative Booking.com extraction...');
+        
+        const roomCards = document.querySelectorAll('.room-item, .accommodation-unit, [data-testid*="property-card"]');
+        console.log(`Found ${roomCards.length} room cards`);
+        
+        roomCards.forEach((card, index) => {
+          try {
+            const cardText = card.textContent;
+            
+            // Look for specific room types from your screenshot
+            const roomTypes = ['Double Room', 'Standard Studio', 'Studio with Terrace', 'Quadruple Room'];
+            
+            for (const roomType of roomTypes) {
+              if (cardText.toLowerCase().includes(roomType.toLowerCase())) {
+                // Found a room type, now find its price
+                const priceMatch = cardText.match(/£\s*(\d{3,4})/);
+                if (priceMatch) {
+                  const price = parseInt(priceMatch[1]);
+                  if (price >= 300 && price <= 3000) {
+                    results.push({
+                      ota: 'Booking.com',
+                      roomName: roomType,
+                      price: price,
+                      currency: 'GBP',
+                      source: 'booking-card-extracted'
+                    });
+                    console.log(`✅ Card method: ${roomType} - £${price}`);
+                  }
+                }
+              }
+            }
+          } catch (e) {
+            console.log(`Error processing card ${index}:`, e.message);
+          }
+        });
+      }
       
       return results;
     });
@@ -300,6 +358,11 @@ async function scrapeBookingCom(page, checkIn, checkOut) {
     );
     
     console.log(`Booking.com extraction complete: ${uniqueRates.length} unique rates found`);
+    
+    if (uniqueRates.length > 0) {
+      console.log('Booking.com rates found:');
+      uniqueRates.forEach(rate => console.log(`  ${rate.roomName}: £${rate.price}`));
+    }
     
     return uniqueRates.length > 0 ? uniqueRates : getFallbackRates('Booking.com', checkIn, checkOut);
     
