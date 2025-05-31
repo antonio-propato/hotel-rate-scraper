@@ -2,9 +2,8 @@ name: Hotel Rate Scraper
 
 on:
   schedule:
-    # Run daily at 6 AM UTC (7 AM UK time)
     - cron: '0 6 * * *'
-  workflow_dispatch: # Allows you to run manually
+  workflow_dispatch:
 
 jobs:
   scrape-hotel-rates:
@@ -25,8 +24,6 @@ jobs:
         npx playwright install chromium
         
     - name: Run hotel scraper
-      env:
-        # GOOGLE_SHEETS_ID: ${{ secrets.GOOGLE_SHEETS_ID }}
       run: node scraper.js
       
     - name: Upload results
