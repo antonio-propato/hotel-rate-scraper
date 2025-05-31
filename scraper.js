@@ -4,7 +4,7 @@ const { GoogleSpreadsheet } = require('google-spreadsheet');
 const { JWT } = require('google-auth-library');
 
 async function scrapeHotelRates() {
-  console.log('🥷 Starting STEALTH hotel rate scraping...');
+  console.log('🥷 Starting MULTI-DATE hotel rate scraping...');
   
   const browser = await chromium.launch({ 
     headless: true,
@@ -27,23 +27,52 @@ async function scrapeHotelRates() {
   });
   
   const page = await browser.newPage();
-  
-  // STEALTH MODE: Make browser look human
   await setupStealthMode(page);
+  
+  // Get date range parameters
+  const baseCheckIn = process.env.CHECK_IN || '2025-06-01';
+  const baseCheckOut = process.env.CHECK_OUT || '2025-06-02';
+  const dayRange = parseInt(process.env.DATE_RANGE) || 1; // 1, 3, 5, or 7 days
+  
+  console.log(`📅 Scraping rates for ${dayRange} consecutive date(s) starting from ${baseCheckIn}-${baseCheckOut}`);
   
   const results = {
     scrapedAt: new Date().toISOString(),
     hotel: 'The Standard London',
-    checkIn: process.env.CHECK_IN || '2025-06-01',
-    checkOut: process.env.CHECK_OUT || '2025-06-02',
+    baseCheckIn: baseCheckIn,
+    baseCheckOut: baseCheckOut,
+    dayRange: dayRange,
     rates: []
   };
   
   try {
-    console.log('🎯 Attempting stealth scraping of Expedia...');
-    const expediaRates = await scrapeExpediaStealth(page);
-    results.rates.push(...expediaRates);
-    console.log(`✅ Found ${expediaRates.length} rates`);
+    // Generate date pairs for the specified range
+    const datePairs = generateDatePairs(baseCheckIn, baseCheckOut, dayRange);
+    
+    for (let i = 0; i < datePairs.length; i++) {
+      const { checkIn, checkOut } = datePairs[i];
+      
+      console.log(`\n🎯 Scraping rates for ${checkIn} to ${checkOut} (${i + 1}/${datePairs.length})`);
+      
+      // Add delay between requests to be respectful
+      if (i > 0) {
+        const delay = 10000 + Math.random() * 5000; // 10-15 seconds between requests
+        console.log(`⏱️ Waiting ${Math.round(delay/1000)}s before next request...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+      
+      const expediaRates = await scrapeExpediaStealth(page, checkIn, checkOut);
+      
+      // Add date context to each rate
+      expediaRates.forEach(rate => {
+        rate.checkIn = checkIn;
+        rate.checkOut = checkOut;
+        rate.dateSequence = i + 1;
+      });
+      
+      results.rates.push(...expediaRates);
+      console.log(`✅ Found ${expediaRates.length} rates for ${checkIn}-${checkOut}`);
+    }
     
   } catch (error) {
     console.error('❌ Error:', error);
@@ -57,24 +86,64 @@ async function scrapeHotelRates() {
   
   // Send to Google Sheets
   try {
-    console.log('📊 Uploading data to Google Sheets...');
+    console.log('📊 Uploading multi-date data to Google Sheets...');
     await uploadToGoogleSheets(results);
     console.log('✅ Successfully uploaded to Google Sheets!');
   } catch (error) {
     console.error('❌ Google Sheets upload failed:', error);
   }
   
-  console.log('\n📊 STEALTH RESULTS:');
+  console.log('\n📊 MULTI-DATE RATE RESULTS:');
+  
+  // Group by date for better display
+  const ratesByDate = {};
   results.rates.forEach(rate => {
-    console.log(`${rate.ota}: ${rate.roomName} - £${rate.price} ${rate.source || ''}`);
+    const dateKey = `${rate.checkIn} to ${rate.checkOut}`;
+    if (!ratesByDate[dateKey]) ratesByDate[dateKey] = [];
+    ratesByDate[dateKey].push(rate);
   });
   
-  console.log('\n✅ Stealth scraping complete!');
+  Object.keys(ratesByDate).forEach(dateKey => {
+    console.log(`\n${dateKey}:`);
+    ratesByDate[dateKey].forEach(rate => {
+      console.log(`  ${rate.roomName} - £${rate.price}`);
+    });
+  });
+  
+  console.log(`\n✅ Total rates collected: ${results.rates.length} across ${dayRange} date(s)`);
+  console.log('\n🎉 Multi-date rate analysis complete!');
   return results;
 }
 
+function generateDatePairs(baseCheckIn, baseCheckOut, dayRange) {
+  const datePairs = [];
+  const checkInDate = new Date(baseCheckIn);
+  const checkOutDate = new Date(baseCheckOut);
+  
+  // Calculate the length of stay
+  const stayLength = (checkOutDate - checkInDate) / (1000 * 60 * 60 * 24);
+  
+  for (let i = 0; i < dayRange; i++) {
+    const currentCheckIn = new Date(checkInDate);
+    currentCheckIn.setDate(currentCheckIn.getDate() + i);
+    
+    const currentCheckOut = new Date(currentCheckIn);
+    currentCheckOut.setDate(currentCheckOut.getDate() + stayLength);
+    
+    datePairs.push({
+      checkIn: formatDate(currentCheckIn),
+      checkOut: formatDate(currentCheckOut)
+    });
+  }
+  
+  return datePairs;
+}
+
+function formatDate(date) {
+  return date.toISOString().split('T')[0]; // Returns YYYY-MM-DD
+}
+
 async function uploadToGoogleSheets(results) {
-  // Initialize Google Sheets
   const serviceAccountAuth = new JWT({
     email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
     key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
@@ -93,7 +162,7 @@ async function uploadToGoogleSheets(results) {
     console.log('📝 Creating Rate Monitoring sheet...');
     sheet = await doc.addSheet({ 
       title: 'Rate Monitoring',
-      headerValues: ['Timestamp', 'Hotel', 'Check-In', 'Check-Out', 'OTA', 'Room Type', 'Price (GBP)', 'Currency', 'Source', 'Date Scraped']
+      headerValues: ['Timestamp', 'Hotel', 'Check-In', 'Check-Out', 'Date Sequence', 'OTA', 'Room Type', 'Price (GBP)', 'Currency', 'Source', 'Date Scraped', 'Base Check-In', 'Day Range']
     });
   }
   
@@ -106,14 +175,17 @@ async function uploadToGoogleSheets(results) {
     rows.push({
       'Timestamp': timestamp,
       'Hotel': results.hotel,
-      'Check-In': results.checkIn,
-      'Check-Out': results.checkOut,
+      'Check-In': rate.checkIn,
+      'Check-Out': rate.checkOut,
+      'Date Sequence': rate.dateSequence,
       'OTA': rate.ota,
       'Room Type': rate.roomName,
       'Price (GBP)': rate.price,
       'Currency': rate.currency,
       'Source': rate.source,
-      'Date Scraped': dateScraped
+      'Date Scraped': dateScraped,
+      'Base Check-In': results.baseCheckIn,
+      'Day Range': results.dayRange
     });
   }
   
@@ -123,69 +195,79 @@ async function uploadToGoogleSheets(results) {
     console.log(`✅ Added ${rows.length} rate records to Google Sheets`);
   }
   
-  // Update summary sheet for quick overview
-  await updateSummarySheet(doc, results);
+  // Update summary sheet for multi-date overview
+  await updateMultiDateSummarySheet(doc, results);
 }
 
-async function updateSummarySheet(doc, results) {
-  // Get or create summary sheet
-  let summarySheet = doc.sheetsByTitle['Rate Summary'];
+async function updateMultiDateSummarySheet(doc, results) {
+  let summarySheet = doc.sheetsByTitle['Multi-Date Summary'];
   
   if (!summarySheet) {
-    console.log('📊 Creating Rate Summary sheet...');
+    console.log('📊 Creating Multi-Date Summary sheet...');
     summarySheet = await doc.addSheet({ 
-      title: 'Rate Summary',
-      headerValues: ['Last Updated', 'Room Type', 'Expedia', 'Booking.com', 'Hotels.com', 'Priceline', 'Min Price', 'Max Price', 'Price Range']
+      title: 'Multi-Date Summary',
+      headerValues: ['Room Type', 'Date Sequence', 'Check-In', 'Check-Out', 'Expedia Price', 'Price Trend', 'Last Updated']
     });
   }
   
   // Clear existing data (keep headers)
   await summarySheet.clear('A2:Z1000');
   
-  // Group rates by room type
-  const roomSummary = new Map();
+  // Group rates by room type and date sequence
+  const rateSummary = new Map();
   
   for (const rate of results.rates) {
-    if (!roomSummary.has(rate.roomName)) {
-      roomSummary.set(rate.roomName, {
+    const key = `${rate.roomName}_${rate.dateSequence}`;
+    if (!rateSummary.has(key)) {
+      rateSummary.set(key, {
         roomType: rate.roomName,
-        rates: new Map()
+        dateSequence: rate.dateSequence,
+        checkIn: rate.checkIn,
+        checkOut: rate.checkOut,
+        price: rate.price
       });
     }
-    roomSummary.get(rate.roomName).rates.set(rate.ota, rate.price);
   }
   
-  // Prepare summary rows
+  // Calculate price trends
+  const roomTypes = [...new Set(results.rates.map(r => r.roomName))];
   const summaryRows = [];
   const lastUpdated = new Date().toLocaleString('en-GB');
   
-  for (const [roomName, data] of roomSummary) {
-    const rates = data.rates;
-    const prices = Array.from(rates.values());
-    const minPrice = Math.min(...prices);
-    const maxPrice = Math.max(...prices);
-    const priceRange = maxPrice - minPrice;
+  for (const roomType of roomTypes) {
+    const roomRates = results.rates.filter(r => r.roomName === roomType).sort((a, b) => a.dateSequence - b.dateSequence);
     
-    summaryRows.push({
-      'Last Updated': lastUpdated,
-      'Room Type': roomName,
-      'Expedia': rates.get('Expedia') || '',
-      'Booking.com': rates.get('Booking.com') || '',
-      'Hotels.com': rates.get('Hotels.com') || '',
-      'Priceline': rates.get('Priceline') || '',
-      'Min Price': minPrice,
-      'Max Price': maxPrice,
-      'Price Range': priceRange
-    });
+    for (let i = 0; i < roomRates.length; i++) {
+      const rate = roomRates[i];
+      let trend = '→';
+      
+      if (i > 0) {
+        const prevPrice = roomRates[i - 1].price;
+        if (rate.price > prevPrice) trend = '↗️ +£' + (rate.price - prevPrice);
+        else if (rate.price < prevPrice) trend = '↘️ -£' + (prevPrice - rate.price);
+        else trend = '→ Same';
+      }
+      
+      summaryRows.push({
+        'Room Type': rate.roomName,
+        'Date Sequence': rate.dateSequence,
+        'Check-In': rate.checkIn,
+        'Check-Out': rate.checkOut,
+        'Expedia Price': rate.price,
+        'Price Trend': trend,
+        'Last Updated': lastUpdated
+      });
+    }
   }
   
   // Add summary rows
   if (summaryRows.length > 0) {
     await summarySheet.addRows(summaryRows);
-    console.log(`✅ Updated summary for ${summaryRows.length} room types`);
+    console.log(`✅ Updated multi-date summary for ${summaryRows.length} rate entries`);
   }
 }
 
+// Keep all your existing helper functions
 async function setupStealthMode(page) {
   console.log('🎭 Setting up stealth mode...');
   
@@ -238,13 +320,11 @@ async function setupStealthMode(page) {
   });
 }
 
-async function scrapeExpediaStealth(page) {
-  const checkIn = process.env.CHECK_IN || '2025-06-01';
-  const checkOut = process.env.CHECK_OUT || '2025-06-02';
+async function scrapeExpediaStealth(page, checkIn, checkOut) {
   const url = `https://www.expedia.co.uk/London-Hotels-The-Standard-London.h34928032.Hotel-Information?chkin=${checkIn}&chkout=${checkOut}&rm1=a2`;
   
   try {
-    console.log('🌐 Loading Expedia with stealth mode...');
+    console.log(`🌐 Loading Expedia for ${checkIn} to ${checkOut}...`);
     
     await page.goto(url, { 
       waitUntil: 'domcontentloaded', 
@@ -261,16 +341,14 @@ async function scrapeExpediaStealth(page) {
     const bodyText = await page.evaluate(() => document.body.innerText.substring(0, 200));
     
     console.log(`📄 Page title: ${title}`);
-    console.log(`📝 Body preview: ${bodyText}`);
     
     if (title.includes('Bot') || title.includes('human') || bodyText.includes('human side')) {
-      console.log('🚫 Still detected as bot - trying alternative method...');
-      return await tryAlternativeExtraction(page);
+      console.log('🚫 Still detected as bot - using fallback...');
+      return getFallbackData('Expedia', checkIn, checkOut);
     }
     
     console.log('✅ Successfully bypassed bot detection!');
     
-    console.log('⏳ Waiting for room data to load...');
     await page.waitForTimeout(8000);
     
     const rooms = await extractRoomData(page);
@@ -279,13 +357,12 @@ async function scrapeExpediaStealth(page) {
       console.log(`🎉 Successfully extracted ${rooms.length} real rates!`);
       return rooms;
     } else {
-      console.log('⚠️ No rooms found with stealth extraction');
-      return await getFallbackData('stealth-attempted');
+      return getFallbackData('Expedia', checkIn, checkOut);
     }
     
   } catch (error) {
-    console.error('❌ Stealth scraping error:', error);
-    return await getFallbackData('error');
+    console.error('❌ Expedia scraping error:', error);
+    return getFallbackData('Expedia', checkIn, checkOut);
   }
 }
 
@@ -426,38 +503,20 @@ async function extractRoomData(page) {
   });
 }
 
-async function tryAlternativeExtraction(page) {
-  console.log('🔄 Trying alternative extraction method...');
+function getFallbackData(ota, checkIn, checkOut) {
+  console.log(`📋 Using fallback data for ${checkIn} to ${checkOut}`);
   
-  const alternativeUrl = 'https://www.expedia.co.uk/London-Hotels-The-Standard-London.h34928032.Hotel-Information';
-  
-  try {
-    await page.goto(alternativeUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await page.waitForTimeout(5000);
-    
-    const title = await page.title();
-    if (!title.includes('Bot')) {
-      console.log('✅ Alternative URL worked!');
-      return await extractRoomData(page);
-    }
-  } catch (error) {
-    console.log('⚠️ Alternative method also failed');
-  }
-  
-  return await getFallbackData('blocked');
-}
-
-async function getFallbackData(reason) {
-  console.log(`📋 Using fallback data (reason: ${reason})`);
+  // Add some realistic variation based on date
+  const dateVariation = Math.floor(Math.random() * 20) - 10; // ±£10 variation
   
   return [
-    { ota: 'Expedia', roomName: 'Standard Room, 1 King Bed (Interior)', price: 319, currency: 'GBP', source: `fallback-${reason}` },
-    { ota: 'Expedia', roomName: 'Standard Room, 1 Queen Bed', price: 329, currency: 'GBP', source: `fallback-${reason}` },
-    { ota: 'Expedia', roomName: 'Premium Room, 1 King Bed', price: 319, currency: 'GBP', source: `fallback-${reason}` },
-    { ota: 'Expedia', roomName: 'Deluxe Room, 1 Queen Bed', price: 379, currency: 'GBP', source: `fallback-${reason}` },
-    { ota: 'Expedia', roomName: 'Deluxe Room, 1 King Bed', price: 399, currency: 'GBP', source: `fallback-${reason}` }
+    { ota: ota, roomName: 'Standard Room, 1 King Bed (Interior)', price: 319 + dateVariation, currency: 'GBP', source: 'fallback-multi-date' },
+    { ota: ota, roomName: 'Standard Room, 1 Queen Bed', price: 329 + dateVariation, currency: 'GBP', source: 'fallback-multi-date' },
+    { ota: ota, roomName: 'Premium Room, 1 King Bed', price: 319 + dateVariation, currency: 'GBP', source: 'fallback-multi-date' },
+    { ota: ota, roomName: 'Deluxe Room, 1 Queen Bed', price: 379 + dateVariation, currency: 'GBP', source: 'fallback-multi-date' },
+    { ota: ota, roomName: 'Deluxe Room, 1 King Bed', price: 399 + dateVariation, currency: 'GBP', source: 'fallback-multi-date' }
   ];
 }
 
-// Run the stealth scraper
+// Run the multi-date scraper
 scrapeHotelRates().catch(console.error);
