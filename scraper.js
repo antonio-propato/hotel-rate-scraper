@@ -31,13 +31,13 @@ async function scrapeHotelRates() {
   // STEALTH MODE: Make browser look human
   await setupStealthMode(page);
   
-  const results = {
-    scrapedAt: new Date().toISOString(),
-    hotel: 'The Standard London',
-    checkIn: '2025-05-31',
-    checkOut: '2025-06-01',
-    rates: []
-  };
+    const results = {
+      scrapedAt: new Date().toISOString(),
+      hotel: 'The Standard London',
+      checkIn: process.env.CHECK_IN || '2025-06-01',
+      checkOut: process.env.CHECK_OUT || '2025-06-02',
+      rates: []
+    };
   
   try {
     console.log('🎯 Attempting stealth scraping of Expedia...');
@@ -239,7 +239,9 @@ async function setupStealthMode(page) {
 }
 
 async function scrapeExpediaStealth(page) {
-  const url = 'https://www.expedia.co.uk/London-Hotels-The-Standard-London.h34928032.Hotel-Information?chkin=2025-05-31&chkout=2025-06-01&rm1=a2';
+  const checkIn = process.env.CHECK_IN || '2025-06-01';
+  const checkOut = process.env.CHECK_OUT || '2025-06-02';
+  const url = `https://www.expedia.co.uk/London-Hotels-The-Standard-London.h34928032.Hotel-Information?chkin=${checkIn}&chkout=${checkOut}&rm1=a2`;
   
   try {
     console.log('🌐 Loading Expedia with stealth mode...');
