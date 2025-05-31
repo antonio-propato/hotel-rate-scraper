@@ -240,157 +240,127 @@ async function scrapeBookingCom(page, checkIn, checkOut) {
       
       console.log('🔍 Starting Booking.com room extraction...');
       
-      // Method 1: Use the hprt-block structure (main room blocks)
-      const roomBlocks = document.querySelectorAll('.hprt-block');
-      console.log(`Found ${roomBlocks.length} room blocks`);
+      // Method 1: Target the exact Booking.com table structure
+      console.log('🎯 Method 1: Using precise table row extraction...');
       
-      roomBlocks.forEach((block, index) => {
+      // Look for table rows that contain room information
+      const tableRows = document.querySelectorAll('tr, .hprt-table-row');
+      console.log(`Found ${tableRows.length} table rows`);
+      
+      tableRows.forEach((row, index) => {
         try {
-          // DYNAMIC: Get whatever room name exists in this block
-          const roomNameSelectors = [
-            '.hprt-roomtype-link .hprt-roomtype-icon-link',
-            '.hprt-roomtype-link span',
-            '.hprt-roomtype-link',
-            '[data-room-name]',
-            '.room-name',
-            '.roomtype-name'
-          ];
+          // Look for room name in the specific structure
+          const roomNameEl = row.querySelector('.hprt-roomtype-icon-link');
+          let roomName = roomNameEl ? roomNameEl.textContent.trim() : null;
           
-          let roomName = null;
-          for (const selector of roomNameSelectors) {
-            const el = block.querySelector(selector);
-            if (el) {
-              roomName = el.textContent?.trim() || el.getAttribute('data-room-name')?.trim();
-              if (roomName && roomName.length > 2) break;
-            }
-          }
-          
-          // DYNAMIC: Get whatever price exists in this block
-          const priceSelectors = [
-            '.bui-price-display__value',
-            '.prco-valign-middle-helper',
-            '[data-testid*="price"]',
-            '.price',
-            '.rate-price'
-          ];
-          
+          // Look for price in the price cell structure
+          const priceEl = row.querySelector('.prco-valign-middle-helper, .bui-price-display__value');
           let price = null;
-          for (const selector of priceSelectors) {
-            const el = block.querySelector(selector);
-            if (el) {
-              const priceText = el.textContent.trim();
-              // DYNAMIC: Extract any currency price (£, $, €, etc.)
-              const priceMatch = priceText.match(/[£$€]\s*(\d{1,4}(?:,\d{3})*)|(\d{1,4}(?:,\d{3})*)\s*[£$€]/);
-              
-              if (priceMatch) {
-                price = parseInt((priceMatch[1] || priceMatch[2]).replace(/,/g, ''));
-                if (price >= 50 && price <= 10000) break; // Reasonable range for any hotel
-              }
+          
+          if (priceEl) {
+            const priceText = priceEl.textContent.trim();
+            // Match prices like £1,849 or £439
+            const priceMatch = priceText.match(/£\s*(\d{1,4}(?:,\d{3})*)/);
+            
+            if (priceMatch) {
+              price = parseInt(priceMatch[1].replace(/,/g, ''));
             }
           }
           
-          // DYNAMIC: Accept whatever valid room/price combination we found
-          if (roomName && price && roomName.length > 2) {
-            console.log(`✅ DYNAMIC: Found room: ${roomName} - £${price}`);
+          // If we found both room name and price, add to results
+          if (roomName && price && roomName.length > 2 && price >= 50 && price <= 15000) {
+            console.log(`✅ PRECISE: Found ${roomName} - £${price}`);
             results.push({
               ota: 'Booking.com',
               roomName: roomName,
               price: price,
               currency: 'GBP',
-              source: 'hprt-block-extraction'
+              source: 'table-row-extraction'
             });
-          } else {
-            console.log(`⚠️ Block ${index}: room="${roomName}", price="${price}" - incomplete data`);
           }
         } catch (e) {
-          console.log(`Error processing room block ${index}:`, e.message);
+          console.log(`Error processing table row ${index}:`, e.message);
         }
       });
       
-      // Method 2: If Method 1 didn't work, try any available room elements
+      // Method 1b: Alternative approach - look for hprt-block containers
       if (results.length === 0) {
-        console.log('🔄 Trying alternative extraction methods...');
+        console.log('🔄 Method 1b: Using hprt-block containers...');
         
-        // DYNAMIC: Look for ANY room-related elements on the page
-        const possibleRoomElements = document.querySelectorAll(`
-          .hprt-table tr, 
-          [data-block-id], 
-          [data-room-id],
-          .room-item,
-          .accommodation-item,
-          .hotel-room,
-          [class*="room"],
-          [class*="accommodation"]
-        `);
+        const roomBlocks = document.querySelectorAll('.hprt-block');
+        console.log(`Found ${roomBlocks.length} room blocks`);
         
-        console.log(`Found ${possibleRoomElements.length} potential room elements`);
-        
-        possibleRoomElements.forEach((element, index) => {
+        roomBlocks.forEach((block, index) => {
           try {
-            // DYNAMIC: Try multiple selectors to find room name
-            const roomNameSelectors = [
-              '[data-room-name]',
-              '.hprt-roomtype-icon-link',
-              '.room-name',
-              '.accommodation-name',
-              'h3', 'h4', 'h5',
-              '.title',
-              '[title]',
-              'strong'
-            ];
+            // Get room name from the exact selector
+            const roomNameEl = block.querySelector('.hprt-roomtype-icon-link');
+            let roomName = roomNameEl ? roomNameEl.textContent.trim() : null;
             
-            let roomName = null;
-            for (const selector of roomNameSelectors) {
-              const el = element.querySelector(selector);
-              if (el) {
-                roomName = el.textContent?.trim() || el.getAttribute('data-room-name') || el.getAttribute('title');
-                if (roomName && roomName.length > 2 && !roomName.toLowerCase().includes('book') && !roomName.toLowerCase().includes('select')) {
-                  break;
-                }
-              }
-            }
-            
-            // DYNAMIC: Try multiple selectors to find price
-            const priceSelectors = [
-              '.bui-price-display__value',
-              '.price',
-              '[data-testid*="price"]',
-              '[class*="price"]',
-              '[class*="rate"]',
-              'strong:contains("£")',
-              'span:contains("£")'
-            ];
-            
+            // Find the corresponding price - it might be in a sibling cell
             let price = null;
-            for (const selector of priceSelectors) {
-              const el = element.querySelector(selector);
-              if (el) {
-                const priceText = el.textContent.trim();
-                // DYNAMIC: Match any reasonable price format
-                const priceMatch = priceText.match(/[£$€¥]\s*(\d{1,4}(?:,\d{3})*)|(\d{1,4}(?:,\d{3})*)\s*[£$€¥]/);
-                
+            
+            // Try to find the price in the same row or nearby elements
+            const parentRow = block.closest('tr');
+            if (parentRow) {
+              const priceEl = parentRow.querySelector('.prco-valign-middle-helper, .bui-price-display__value');
+              if (priceEl) {
+                const priceText = priceEl.textContent.trim();
+                const priceMatch = priceText.match(/£\s*(\d{1,4}(?:,\d{3})*)/);
                 if (priceMatch) {
-                  price = parseInt((priceMatch[1] || priceMatch[2]).replace(/,/g, ''));
-                  if (price >= 50 && price <= 10000) break;
+                  price = parseInt(priceMatch[1].replace(/,/g, ''));
                 }
               }
             }
             
-            // DYNAMIC: Accept any valid room/price pair we find
-            if (roomName && price) {
-              console.log(`✅ DYNAMIC: Method 2 found: ${roomName} - £${price}`);
+            if (roomName && price && roomName.length > 2 && price >= 50 && price <= 15000) {
+              console.log(`✅ BLOCK: Found ${roomName} - £${price}`);
               results.push({
                 ota: 'Booking.com',
                 roomName: roomName,
                 price: price,
                 currency: 'GBP',
-                source: 'alternative-extraction'
+                source: 'hprt-block-extraction'
               });
             }
           } catch (e) {
-            console.log(`Error processing element ${index}:`, e.message);
+            console.log(`Error processing room block ${index}:`, e.message);
           }
         });
+      }
+      
+      // Method 2: Direct selector approach for the exact HTML structure
+      if (results.length === 0) {
+        console.log('🔄 Method 2: Direct selector approach...');
+        
+        // Get all room names
+        const roomNameElements = document.querySelectorAll('.hprt-roomtype-icon-link');
+        const roomNames = Array.from(roomNameElements).map(el => el.textContent.trim()).filter(name => name.length > 2);
+        
+        // Get all prices 
+        const priceElements = document.querySelectorAll('.prco-valign-middle-helper');
+        const prices = Array.from(priceElements).map(el => {
+          const priceText = el.textContent.trim();
+          const priceMatch = priceText.match(/£\s*(\d{1,4}(?:,\d{3})*)/);
+          return priceMatch ? parseInt(priceMatch[1].replace(/,/g, '')) : null;
+        }).filter(price => price && price >= 50 && price <= 15000);
+        
+        console.log(`Found ${roomNames.length} room names: [${roomNames.join(', ')}]`);
+        console.log(`Found ${prices.length} prices: [£${prices.join(', £')}]`);
+        
+        // Match room names with prices (they should appear in the same order)
+        const maxMatches = Math.min(roomNames.length, prices.length);
+        for (let i = 0; i < maxMatches; i++) {
+          if (roomNames[i] && prices[i]) {
+            console.log(`✅ DIRECT: Matched ${roomNames[i]} - £${prices[i]}`);
+            results.push({
+              ota: 'Booking.com',
+              roomName: roomNames[i],
+              price: prices[i],
+              currency: 'GBP',
+              source: 'direct-selector-matching'
+            });
+          }
+        }
       }
       
       // Method 3: Ultra-flexible fallback - find ALL prices and room names on page
