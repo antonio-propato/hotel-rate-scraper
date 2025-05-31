@@ -45,10 +45,6 @@ async function scrapeHotelRates() {
     results.rates.push(...expediaRates);
     console.log(`✅ Found ${expediaRates.length} rates`);
     
-    // TODO: Add more OTAs here
-    // const bookingRates = await scrapeBookingStealth(page);
-    // results.rates.push(...bookingRates);
-    
   } catch (error) {
     console.error('❌ Error:', error);
     results.error = error.message;
@@ -189,8 +185,6 @@ async function updateSummarySheet(doc, results) {
     console.log(`✅ Updated summary for ${summaryRows.length} room types`);
   }
 }
-
-// [Keep all your existing functions: setupStealthMode, scrapeExpediaStealth, simulateHumanBehavior, extractRoomData, etc.]
 
 async function setupStealthMode(page) {
   console.log('🎭 Setting up stealth mode...');
