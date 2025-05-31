@@ -3,6 +3,8 @@
   "version": "1.0.0",
   "main": "scraper.js",
   "dependencies": {
-    "playwright": "^1.40.0"
+    "playwright": "^1.40.0",
+    "google-spreadsheet": "^4.1.2",
+    "google-auth-library": "^9.4.0"
   }
 }
