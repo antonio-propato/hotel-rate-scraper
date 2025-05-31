@@ -87,12 +87,12 @@ async function uploadToGoogleSheets(results) {
   console.log(`📋 Connected to: ${doc.title}`);
   
   // Get or create the main rates sheet
-  let sheet = doc.sheetsByTitle['Rate Monitoring'] || doc.sheetsByIndex[0];
+  let sheet = doc.sheetsByTitle['Expedia'] || doc.sheetsByIndex[0];
   
-  if (!doc.sheetsByTitle['Rate Monitoring']) {
-    console.log('📝 Creating Rate Monitoring sheet...');
+  if (!doc.sheetsByTitle['Expedia']) {
+    console.log('📝 Creating Expedia sheet...');
     sheet = await doc.addSheet({ 
-      title: 'Rate Monitoring',
+      title: 'Expedia',
       headerValues: ['Timestamp', 'Hotel', 'Check-In', 'Check-Out', 'OTA', 'Room Type', 'Price (GBP)', 'Currency', 'Source', 'Date Scraped']
     });
   }
