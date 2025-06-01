@@ -195,234 +195,239 @@ async function extractBookingRoomData(page) {
   return await page.evaluate(() => {
     const rates = [];
     
-    console.log('🔍 Starting Booking.com room extraction with correct selectors...');
+    console.log('🔍 Starting Booking.com room extraction with correct structure...');
     
-    // CORRECT APPROACH: Find all room links first, then find corresponding prices
-    const roomLinks = document.querySelectorAll('a.hprt-roomtype-link[data-room-id]');
-    console.log(`Found ${roomLinks.length} room links`);
+    // NEW APPROACH: Find all room blocks and all price cells separately, then match them
     
-    // Get all unique room types
-    const uniqueRooms = new Map();
+    // 1. Extract all room types from hprt-block divs
+    const roomBlocks = document.querySelectorAll('div.hprt-block');
+    console.log(`Found ${roomBlocks.length} room blocks`);
     
-    roomLinks.forEach((link) => {
-      const roomId = link.getAttribute('data-room-id');
-      const roomNameEl = link.querySelector('.hprt-roomtype-icon-link');
-      
-      if (roomNameEl) {
-        const roomName = roomNameEl.textContent.trim();
-        if (roomName && roomName.length > 2) {
-          uniqueRooms.set(roomId, roomName);
-          console.log(`Found room: ${roomName} (ID: ${roomId})`);
-        }
-      }
-    });
+    const roomTypes = [];
     
-    console.log(`Found ${uniqueRooms.size} unique room types`);
-    
-    // Now find prices for each room type
-    uniqueRooms.forEach((roomName, roomId) => {
+    roomBlocks.forEach((block, index) => {
       try {
-        // Method 1: Look for prices in the same row as the room link
-        const roomLink = document.querySelector(`a[data-room-id="${roomId}"]`);
-        if (!roomLink) return;
+        // Look for room name in the block
+        let roomName = null;
         
-        // Find the table row containing this room
-        const row = roomLink.closest('tr');
-        if (!row) {
-          console.log(`No table row found for ${roomName}`);
-          return;
-        }
-        
-        // Look for the main price display (the big price shown to users)
-        // These are the prices that appear BEFORE "Includes taxes and charges"
-        const priceSelectors = [
-          // Try to find the main price display in the room type column
-          '.hprt-price-price',
-          '.js-sr-price-summary',
-          '.bui-price-display__value',
-          // Look for price elements that are NOT in small text/details
-          '*:not(.sr-price-summary__taxes):not(.sr-price-summary__detail) .prco-valign-middle-helper'
+        // Try multiple selectors for room names
+        const nameSelectors = [
+          '.hprt-roomtype-icon-link',
+          '.hprt-roomtype-link span',
+          '.hp_rt_room_name_icon__container span',
+          'a[data-room-id] span'
         ];
         
-        let price = null;
-        
-        // Method 1: Look for price in the same row, but target the main display price
-        for (const selector of priceSelectors) {
-          const priceElements = row.querySelectorAll(selector);
-          
-          for (const priceEl of priceElements) {
-            const priceText = priceEl.textContent;
-            const priceMatch = priceText.match(/£\s*(\d{1,4}(?:,\d{3})*)/);
-            
-            if (priceMatch) {
-              const extractedPrice = parseInt(priceMatch[1].replace(',', ''));
-              if (extractedPrice >= 200 && extractedPrice <= 3000) {
-                // Check if this price element comes BEFORE any "includes taxes" text
-                const parentText = priceEl.closest('td')?.textContent || priceEl.parentElement?.textContent || '';
-                const priceIndex = parentText.indexOf('£' + priceMatch[1]);
-                const taxesIndex = parentText.toLowerCase().indexOf('includes taxes');
-                
-                if (taxesIndex === -1 || priceIndex < taxesIndex) {
-                  price = extractedPrice;
-                  console.log(`✅ Found main display price for ${roomName}: £${price} using selector ${selector}`);
-                  break;
-                }
-              }
-            }
-          }
-          
-          if (price) break;
-        }
-        
-        // Method 2: If no price found, look specifically in the "Today's price" column
-        if (!price) {
-          // Look for elements that might be in the price column
-          const todaysPriceElements = row.querySelectorAll('td:nth-child(3), td:nth-child(4), .hprt-price-price-current');
-          
-          for (const col of todaysPriceElements) {
-            const colText = col.textContent;
-            const priceMatch = colText.match(/£\s*(\d{1,4}(?:,\d{3})*)/);
-            
-            if (priceMatch) {
-              const extractedPrice = parseInt(priceMatch[1].replace(',', ''));
-              if (extractedPrice >= 200 && extractedPrice <= 3000) {
-                // Make sure this is the main price, not a detail price
-                const beforeTaxes = colText.split('includes taxes')[0] || colText.split('Includes taxes')[0] || colText;
-                if (beforeTaxes.includes('£' + priceMatch[1])) {
-                  price = extractedPrice;
-                  console.log(`✅ Found price in Today's price column for ${roomName}: £${price}`);
-                  break;
-                }
-              }
+        for (const selector of nameSelectors) {
+          const nameEl = block.querySelector(selector);
+          if (nameEl) {
+            roomName = nameEl.textContent.trim();
+            if (roomName && roomName.length > 2) {
+              console.log(`✅ Found room type: ${roomName}`);
+              break;
             }
           }
         }
         
-        // Method 3: Enhanced fallback - look for the largest/most prominent price
-        if (!price) {
-          console.log(`🔍 No main price found for ${roomName}, trying enhanced search...`);
+        // If still no room name, try text content of the block
+        if (!roomName) {
+          const textContent = block.textContent;
+          const roomPatterns = [
+            'Double Room',
+            'Standard Studio', 
+            'Suite',
+            'Studio with Terrace',
+            'Quadruple Room - Disability Access',
+            'Deluxe Room',
+            'Premium Room'
+          ];
           
-          // Get all price elements in the row and pick the most likely candidate
-          const allPricesInRow = [];
-          const allElements = row.querySelectorAll('*');
-          
-          for (const el of allElements) {
-            const text = el.textContent;
-            const priceMatch = text.match(/£\s*(\d{1,4}(?:,\d{3})*)/);
-            
-            if (priceMatch) {
-              const extractedPrice = parseInt(priceMatch[1].replace(',', ''));
-              if (extractedPrice >= 200 && extractedPrice <= 3000) {
-                // Check if this looks like a main price (bigger font, not in small text)
-                const computedStyle = window.getComputedStyle(el);
-                const fontSize = parseFloat(computedStyle.fontSize);
-                const fontWeight = computedStyle.fontWeight;
-                
-                allPricesInRow.push({
-                  price: extractedPrice,
-                  element: el,
-                  fontSize: fontSize,
-                  fontWeight: fontWeight,
-                  text: text
-                });
-              }
+          for (const pattern of roomPatterns) {
+            if (textContent.includes(pattern)) {
+              roomName = pattern;
+              console.log(`✅ Found room type via pattern: ${roomName}`);
+              break;
             }
-          }
-          
-          if (allPricesInRow.length > 0) {
-            // Sort by font size (largest first) and font weight
-            allPricesInRow.sort((a, b) => {
-              if (a.fontSize !== b.fontSize) return b.fontSize - a.fontSize;
-              return (b.fontWeight === 'bold' || parseInt(b.fontWeight) > 400 ? 1 : 0) - 
-                     (a.fontWeight === 'bold' || parseInt(a.fontWeight) > 400 ? 1 : 0);
-            });
-            
-            price = allPricesInRow[0].price;
-            console.log(`✅ Found most prominent price for ${roomName}: £${price} (font: ${allPricesInRow[0].fontSize}px, weight: ${allPricesInRow[0].fontWeight})`);
           }
         }
         
-        // Add the rate if we found a valid price
-        if (price) {
-          rates.push({
-            ota: 'Booking.com',
-            roomName: roomName,
-            price: price,
-            currency: 'GBP',
-            source: 'stealth-extracted'
+        if (roomName) {
+          roomTypes.push({
+            name: roomName,
+            index: index,
+            block: block
           });
-        } else {
-          console.log(`❌ No valid price found for ${roomName}`);
         }
         
       } catch (e) {
-        console.log(`Error processing room ${roomName}:`, e.message);
+        console.log(`Error processing room block ${index}:`, e.message);
       }
     });
     
-    // Fallback: If no rates found, try the Google Apps Script approach
+    console.log(`Extracted ${roomTypes.length} room types:`, roomTypes.map(r => r.name));
+    
+    // 2. Extract all prices from price cells
+    const priceCells = document.querySelectorAll('td.hp-price-left-align, td.hprt-table-cell-price');
+    console.log(`Found ${priceCells.length} price cells`);
+    
+    const prices = [];
+    
+    priceCells.forEach((cell, index) => {
+      try {
+        // Look for the main price (before "Includes taxes and charges")
+        const priceEl = cell.querySelector('.bui-price-display__value .prco-valign-middle-helper');
+        
+        if (priceEl) {
+          const priceText = priceEl.textContent;
+          const priceMatch = priceText.match(/£\s*(\d{1,4}(?:,\d{3})*)/);
+          
+          if (priceMatch) {
+            const price = parseInt(priceMatch[1].replace(',', ''));
+            if (price >= 200 && price <= 3000) {
+              console.log(`✅ Found price: £${price}`);
+              prices.push({
+                price: price,
+                index: index,
+                cell: cell
+              });
+            }
+          }
+        }
+        
+      } catch (e) {
+        console.log(`Error processing price cell ${index}:`, e.message);
+      }
+    });
+    
+    console.log(`Extracted ${prices.length} prices:`, prices.map(p => p.price));
+    
+    // 3. Match room types with prices based on DOM position/order
+    const minLength = Math.min(roomTypes.length, prices.length);
+    
+    for (let i = 0; i < minLength; i++) {
+      const roomType = roomTypes[i];
+      const price = prices[i];
+      
+      rates.push({
+        ota: 'Booking.com',
+        roomName: roomType.name,
+        price: price.price,
+        currency: 'GBP',
+        source: 'structure-extracted'
+      });
+      
+      console.log(`✅ Matched: ${roomType.name} → £${price.price}`);
+    }
+    
+    // 4. If we have more room types than prices, try to find additional prices
+    if (roomTypes.length > prices.length) {
+      console.log(`🔍 Found more room types (${roomTypes.length}) than prices (${prices.length}), searching for additional prices...`);
+      
+      for (let i = prices.length; i < roomTypes.length; i++) {
+        const roomType = roomTypes[i];
+        
+        // Try to find price near this room block
+        const nearbyPrices = findNearbyPrices(roomType.block);
+        if (nearbyPrices.length > 0) {
+          rates.push({
+            ota: 'Booking.com',
+            roomName: roomType.name,
+            price: nearbyPrices[0],
+            currency: 'GBP',
+            source: 'nearby-extracted'
+          });
+          
+          console.log(`✅ Found nearby price for ${roomType.name}: £${nearbyPrices[0]}`);
+        }
+      }
+    }
+    
+    // Helper function to find prices near a room block
+    function findNearbyPrices(roomBlock) {
+      const foundPrices = [];
+      
+      // Look in the same table row
+      const row = roomBlock.closest('tr');
+      if (row) {
+        const priceElements = row.querySelectorAll('.prco-valign-middle-helper');
+        
+        for (const priceEl of priceElements) {
+          const priceMatch = priceEl.textContent.match(/£\s*(\d{1,4}(?:,\d{3})*)/);
+          if (priceMatch) {
+            const price = parseInt(priceMatch[1].replace(',', ''));
+            if (price >= 200 && price <= 3000) {
+              foundPrices.push(price);
+            }
+          }
+        }
+      }
+      
+      return foundPrices;
+    }
+    
+    // Fallback: If still no rates, use the table parsing method
     if (rates.length === 0) {
-      console.log('🔄 No rates found with primary method, trying table parsing...');
+      console.log('🔄 No rates found with structure method, trying table parsing fallback...');
       return extractBookingTableMethod();
     }
     
     return rates;
     
-    // Alternative method using table parsing similar to your Google Apps Script
+    // Fallback table parsing method
     function extractBookingTableMethod() {
       const alternativeRates = [];
       
-      // Get the main content as text and look for table rows
-      const bodyText = document.body.innerHTML;
-      const tableRows = bodyText.match(/<tr[^>]*>[\s\S]*?<\/tr>/gi) || [];
+      // Get all table rows
+      const tableRows = document.querySelectorAll('tr');
+      console.log(`Fallback: Found ${tableRows.length} table rows`);
       
-      console.log(`Found ${tableRows.length} table rows to analyze`);
-      
-      // Room types from your Google Apps Script
       const roomTypes = [
-        'Quadruple Room - Disability Access',
         'Double Room',
-        'Deluxe Queen Room', 
         'Standard Studio',
-        'Suite',
-        'Studio with Terrace'
+        'Suite', 
+        'Studio with Terrace',
+        'Quadruple Room - Disability Access',
+        'Deluxe Room',
+        'Premium Room'
       ];
       
-      for (const row of tableRows) {
-        const cleanRow = row.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+      tableRows.forEach((row, index) => {
+        const rowText = row.textContent;
         
-        // Find room type
+        // Find room type in this row
         let foundRoomType = null;
         for (const roomType of roomTypes) {
-          if (cleanRow.includes(roomType)) {
+          if (rowText.includes(roomType)) {
             foundRoomType = roomType;
             break;
           }
         }
         
-        if (!foundRoomType) continue;
+        if (!foundRoomType) return;
         
-        // Extract price using your regex
-        const priceMatch = cleanRow.match(/£\s*(\d+(?:,\d{3})*(?:\.\d{2})?)/);
-        if (!priceMatch) continue;
+        // Find price in this row (before "Includes taxes")
+        const beforeTaxesText = rowText.split('Includes taxes')[0] || rowText;
+        const priceMatch = beforeTaxesText.match(/£\s*(\d{1,4}(?:,\d{3})*)/);
         
-        const price = parseFloat(priceMatch[1].replace(/,/g, ''));
-        if (price < 50 || price > 5000) continue;
-        
-        // Check for duplicates
-        const existing = alternativeRates.find(r => r.roomName === foundRoomType && r.price === price);
-        if (existing) continue;
-        
-        alternativeRates.push({
-          ota: 'Booking.com',
-          roomName: foundRoomType,
-          price: price,
-          currency: 'GBP',
-          source: 'table-extracted'
-        });
-        
-        console.log(`✅ Table method: ${foundRoomType} - £${price}`);
-      }
+        if (priceMatch) {
+          const price = parseInt(priceMatch[1].replace(',', ''));
+          if (price >= 200 && price <= 3000) {
+            // Check for duplicates
+            const existing = alternativeRates.find(r => r.roomName === foundRoomType && r.price === price);
+            if (!existing) {
+              alternativeRates.push({
+                ota: 'Booking.com',
+                roomName: foundRoomType,
+                price: price,
+                currency: 'GBP',
+                source: 'fallback-table'
+              });
+              
+              console.log(`✅ Fallback: ${foundRoomType} → £${price}`);
+            }
+          }
+        }
+      });
       
       return alternativeRates;
     }
