@@ -40,10 +40,20 @@ async function scrapeHotelRates() {
   };
   
   try {
+    // Scrape Expedia
     console.log('🎯 Attempting stealth scraping of Expedia...');
     const expediaRates = await scrapeExpediaStealth(page);
     results.rates.push(...expediaRates);
-    console.log(`✅ Found ${expediaRates.length} rates`);
+    console.log(`✅ Expedia: Found ${expediaRates.length} rates`);
+    
+    // Add delay between sites
+    await page.waitForTimeout(5000 + Math.random() * 5000);
+    
+    // Scrape Booking.com
+    console.log('🏨 Attempting stealth scraping of Booking.com...');
+    const bookingRates = await scrapeBookingStealth(page);
+    results.rates.push(...bookingRates);
+    console.log(`✅ Booking.com: Found ${bookingRates.length} rates`);
     
   } catch (error) {
     console.error('❌ Error:', error);
@@ -65,12 +75,295 @@ async function scrapeHotelRates() {
   }
   
   console.log('\n📊 STEALTH RESULTS:');
+  const groupedRates = {};
   results.rates.forEach(rate => {
-    console.log(`${rate.ota}: ${rate.roomName} - £${rate.price} ${rate.source || ''}`);
+    if (!groupedRates[rate.ota]) groupedRates[rate.ota] = [];
+    groupedRates[rate.ota].push(rate);
+  });
+  
+  Object.keys(groupedRates).forEach(ota => {
+    console.log(`\n${ota}:`);
+    groupedRates[ota].forEach(rate => {
+      console.log(`  ${rate.roomName} - £${rate.price} ${rate.source || ''}`);
+    });
   });
   
   console.log('\n✅ Stealth scraping complete!');
   return results;
+}
+
+async function scrapeBookingStealth(page) {
+  const checkIn = process.env.CHECK_IN || '2025-06-01';
+  const checkOut = process.env.CHECK_OUT || '2025-06-02';
+  
+  // Convert dates to Booking.com format (YYYY-MM-DD)
+  const checkInFormatted = new Date(checkIn).toISOString().split('T')[0];
+  const checkOutFormatted = new Date(checkOut).toISOString().split('T')[0];
+  
+  const url = `https://www.booking.com/hotel/gb/the-standard-london.en-gb.html?checkin=${checkInFormatted}&checkout=${checkOutFormatted}&group_adults=2&group_children=0&no_rooms=1&selected_currency=GBP`;
+  
+  try {
+    console.log('🌐 Loading Booking.com with stealth mode...');
+    
+    await page.goto(url, { 
+      waitUntil: 'domcontentloaded', 
+      timeout: 60000 
+    });
+    
+    // Human-like delay
+    const delay = 4000 + Math.random() * 6000;
+    console.log(`⏱️ Human-like delay: ${Math.round(delay/1000)}s`);
+    await page.waitForTimeout(delay);
+    
+    await simulateHumanBehavior(page);
+    
+    // Check if we're blocked
+    const title = await page.title();
+    const bodyText = await page.evaluate(() => document.body.innerText.substring(0, 200));
+    
+    console.log(`📄 Booking.com title: ${title}`);
+    console.log(`📝 Body preview: ${bodyText}`);
+    
+    if (title.includes('blocked') || title.includes('robot') || bodyText.includes('blocked')) {
+      console.log('🚫 Detected as bot on Booking.com - using fallback...');
+      return await getBookingFallbackData('blocked');
+    }
+    
+    // Close any popups/modals
+    await closeBookingPopups(page);
+    
+    console.log('✅ Successfully loaded Booking.com!');
+    
+    // Wait for room data to load
+    console.log('⏳ Waiting for room data to load...');
+    await page.waitForTimeout(8000);
+    
+    // Try to wait for room elements
+    try {
+      await page.waitForSelector('.hprt-table, .hp_rt_room_table, [data-testid="property-section-rooms"]', { timeout: 15000 });
+    } catch (e) {
+      console.log('⚠️ Room table selector not found, proceeding with extraction...');
+    }
+    
+    const rooms = await extractBookingRoomData(page);
+    
+    if (rooms.length > 0) {
+      console.log(`🎉 Successfully extracted ${rooms.length} Booking.com rates!`);
+      return rooms;
+    } else {
+      console.log('⚠️ No rooms found with Booking.com extraction');
+      return await getBookingFallbackData('no-rooms-found');
+    }
+    
+  } catch (error) {
+    console.error('❌ Booking.com scraping error:', error);
+    return await getBookingFallbackData('error');
+  }
+}
+
+async function closeBookingPopups(page) {
+  console.log('🔄 Closing Booking.com popups...');
+  
+  const popupSelectors = [
+    'button[aria-label*="Close"]',
+    'button[aria-label*="Dismiss"]',
+    '.bui-modal__close',
+    '.bk-icon-close',
+    '[data-modal-header-async-close]',
+    'button:has-text("Close")',
+    'button:has-text("Accept")',
+    'button:has-text("OK")',
+    '.genius-property-page-modal button',
+    '[data-testid="genius-onboarding-modal"] button'
+  ];
+  
+  for (const selector of popupSelectors) {
+    try {
+      const element = await page.$(selector);
+      if (element) {
+        await element.click();
+        console.log(`✅ Closed popup: ${selector}`);
+        await page.waitForTimeout(1000);
+      }
+    } catch (e) {
+      // Continue if popup not found
+    }
+  }
+}
+
+async function extractBookingRoomData(page) {
+  return await page.evaluate(() => {
+    const rates = [];
+    
+    console.log('🔍 Starting Booking.com room extraction...');
+    
+    // Try multiple selector strategies for room containers
+    const roomContainerSelectors = [
+      '.hprt-table tbody tr',
+      '.hp_rt_room_table tbody tr', 
+      '[data-testid="property-section-rooms"] > div',
+      '.roomstable tbody tr',
+      '.hprt-roomtype-block'
+    ];
+    
+    let roomElements = [];
+    
+    for (const selector of roomContainerSelectors) {
+      roomElements = document.querySelectorAll(selector);
+      if (roomElements.length > 0) {
+        console.log(`Found ${roomElements.length} room elements with selector: ${selector}`);
+        break;
+      }
+    }
+    
+    if (roomElements.length === 0) {
+      console.log('No room elements found, trying alternative extraction...');
+      return extractBookingAlternative();
+    }
+    
+    roomElements.forEach((element, index) => {
+      try {
+        // Extract room name using multiple strategies
+        let roomName = null;
+        
+        const roomNameSelectors = [
+          '.hprt-roomtype-link',
+          '.hprt_rt_room_name',
+          'a[data-room-name]',
+          '.room-name',
+          '.roomtype-name',
+          'a[href*="#RD"]'
+        ];
+        
+        for (const selector of roomNameSelectors) {
+          const nameEl = element.querySelector(selector);
+          if (nameEl) {
+            roomName = nameEl.textContent.trim();
+            if (roomName && roomName.length > 2) break;
+          }
+        }
+        
+        // If still no room name, try getting from data attributes
+        if (!roomName) {
+          const linkEl = element.querySelector('a[data-room-id]');
+          if (linkEl) {
+            roomName = linkEl.getAttribute('data-room-name') || linkEl.textContent.trim();
+          }
+        }
+        
+        // Extract price using multiple strategies
+        let price = null;
+        
+        const priceSelectors = [
+          '.bui-price-display__value',
+          '.prco-valign-middle-helper',
+          '.bui-price-display',
+          '.hprt-price-price',
+          '.totalPrice',
+          '[data-testid*="price"]'
+        ];
+        
+        for (const selector of priceSelectors) {
+          const priceEl = element.querySelector(selector);
+          if (priceEl) {
+            const priceText = priceEl.textContent;
+            const priceMatch = priceText.match(/£\s*(\d{1,4}(?:,\d{3})*)/);
+            if (priceMatch) {
+              price = parseInt(priceMatch[1].replace(',', ''));
+              break;
+            }
+          }
+        }
+        
+        // Alternative price extraction from parent elements
+        if (!price) {
+          const priceText = element.textContent;
+          const priceMatch = priceText.match(/£\s*(\d{2,4})/);
+          if (priceMatch) {
+            price = parseInt(priceMatch[1]);
+          }
+        }
+        
+        // Validate and add the room if we have both name and price
+        if (roomName && price && price >= 100 && price <= 5000) {
+          // Clean up room name
+          roomName = roomName
+            .replace(/^\s*\n\s*/, '')
+            .replace(/\s*\n\s*$/, '')
+            .trim();
+          
+          if (!roomName.includes('Select') && !roomName.includes('Choose') && roomName.length > 3) {
+            rates.push({
+              ota: 'Booking.com',
+              roomName: roomName,
+              price: price,
+              currency: 'GBP',
+              source: 'stealth-extracted'
+            });
+            
+            console.log(`✅ Extracted: ${roomName} - £${price}`);
+          }
+        }
+        
+      } catch (e) {
+        console.log(`Error processing Booking.com room ${index}:`, e.message);
+      }
+    });
+    
+    return rates;
+    
+    // Alternative extraction function
+    function extractBookingAlternative() {
+      console.log('Trying alternative Booking.com extraction...');
+      const alternativeRates = [];
+      
+      // Look for all price elements on the page
+      const priceElements = document.querySelectorAll('[class*="price"], [data-testid*="price"]');
+      const roomLinks = document.querySelectorAll('a[data-room-id], a[href*="#RD"]');
+      
+      console.log(`Found ${priceElements.length} price elements and ${roomLinks.length} room links`);
+      
+      // Try to match room names with prices
+      roomLinks.forEach((link, index) => {
+        const roomName = link.textContent.trim();
+        if (roomName && roomName.length > 3) {
+          // Look for nearby price element
+          let priceEl = link.closest('tr')?.querySelector('[class*="price"]') ||
+                       link.parentElement?.parentElement?.querySelector('[class*="price"]');
+          
+          if (priceEl) {
+            const priceMatch = priceEl.textContent.match(/£\s*(\d{2,4})/);
+            if (priceMatch) {
+              const price = parseInt(priceMatch[1]);
+              if (price >= 100 && price <= 5000) {
+                alternativeRates.push({
+                  ota: 'Booking.com',
+                  roomName: roomName,
+                  price: price,
+                  currency: 'GBP',
+                  source: 'alternative-extracted'
+                });
+              }
+            }
+          }
+        }
+      });
+      
+      return alternativeRates;
+    }
+  });
+}
+
+async function getBookingFallbackData(reason) {
+  console.log(`📋 Using Booking.com fallback data (reason: ${reason})`);
+  
+  return [
+    { ota: 'Booking.com', roomName: 'Double Room', price: 389, currency: 'GBP', source: `fallback-${reason}` },
+    { ota: 'Booking.com', roomName: 'Double Room', price: 489, currency: 'GBP', source: `fallback-${reason}` },
+    { ota: 'Booking.com', roomName: 'Double Room', price: 519, currency: 'GBP', source: `fallback-${reason}` },
+    { ota: 'Booking.com', roomName: 'Standard Studio', price: 749, currency: 'GBP', source: `fallback-${reason}` },
+    { ota: 'Booking.com', roomName: 'Suite', price: 1599, currency: 'GBP', source: `fallback-${reason}` }
+  ];
 }
 
 async function uploadToGoogleSheets(results) {
@@ -86,13 +379,13 @@ async function uploadToGoogleSheets(results) {
   
   console.log(`📋 Connected to: ${doc.title}`);
   
-  // Get or create the main rates sheet
-  let sheet = doc.sheetsByTitle['Expedia'] || doc.sheetsByIndex[0];
+  // Get or create the main rates sheet (combining both sources)
+  let sheet = doc.sheetsByTitle['Hotel Rates'] || doc.sheetsByIndex[0];
   
-  if (!doc.sheetsByTitle['Expedia']) {
-    console.log('📝 Creating Expedia sheet...');
+  if (!doc.sheetsByTitle['Hotel Rates']) {
+    console.log('📝 Creating Hotel Rates sheet...');
     sheet = await doc.addSheet({ 
-      title: 'Expedia',
+      title: 'Hotel Rates',
       headerValues: ['Timestamp', 'Hotel', 'Check-In', 'Check-Out', 'OTA', 'Room Type', 'Price (GBP)', 'Currency', 'Source', 'Date Scraped']
     });
   }
