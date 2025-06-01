@@ -274,8 +274,13 @@ async function extractBookingRoomData(page) {
     
     priceCells.forEach((cell, index) => {
       try {
-        // Look for the main price (before "Includes taxes and charges")
-        const priceEl = cell.querySelector('.bui-price-display__value .prco-valign-middle-helper');
+        // Look for the main price using the exact structure from HTML
+        let priceEl = cell.querySelector('.bui-price-display__value .prco-valign-middle-helper');
+        
+        // Also try alternative selectors
+        if (!priceEl) {
+          priceEl = cell.querySelector('.prco-valign-middle-helper');
+        }
         
         if (priceEl) {
           const priceText = priceEl.textContent;
@@ -283,15 +288,34 @@ async function extractBookingRoomData(page) {
           
           if (priceMatch) {
             const price = parseInt(priceMatch[1].replace(',', ''));
+            console.log(`🔍 Found price in cell ${index}: £${price} from text "${priceText}"`);
+            
             if (price >= 200 && price <= 3000) {
-              console.log(`✅ Found price: £${price}`);
-              prices.push({
-                price: price,
-                index: index,
-                cell: cell
-              });
+              // Make sure this price appears BEFORE "Includes taxes and charges"
+              const cellText = cell.textContent;
+              const pricePosition = cellText.indexOf('£' + priceMatch[1]);
+              const taxesPosition = cellText.toLowerCase().indexOf('includes taxes');
+              
+              if (taxesPosition === -1 || pricePosition < taxesPosition) {
+                console.log(`✅ Valid price: £${price} (position check passed)`);
+                prices.push({
+                  price: price,
+                  index: index,
+                  cell: cell
+                });
+              } else {
+                console.log(`❌ Price £${price} appears after taxes text, skipping`);
+              }
+            } else {
+              console.log(`❌ Price £${price} outside valid range`);
             }
+          } else {
+            console.log(`❌ No price match in text: "${priceText}"`);
           }
+        } else {
+          console.log(`❌ No price element found in cell ${index}`);
+          // Debug: show what's actually in the cell
+          console.log(`Cell ${index} content: "${cell.textContent.substring(0, 100)}..."`);
         }
         
       } catch (e) {
