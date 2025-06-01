@@ -233,16 +233,20 @@ async function extractBookingRoomData(page) {
           return;
         }
         
-        // Look for price elements in this row
+        // Look for the main price display (the big price shown to users)
+        // These are the prices that appear BEFORE "Includes taxes and charges"
         const priceSelectors = [
-          '.bui-price-display__value .prco-valign-middle-helper',
-          '.prco-valign-middle-helper',
+          // Try to find the main price display in the room type column
+          '.hprt-price-price',
+          '.js-sr-price-summary',
           '.bui-price-display__value',
-          '[data-et-mouseenter*="price"]'
+          // Look for price elements that are NOT in small text/details
+          '*:not(.sr-price-summary__taxes):not(.sr-price-summary__detail) .prco-valign-middle-helper'
         ];
         
         let price = null;
         
+        // Method 1: Look for price in the same row, but target the main display price
         for (const selector of priceSelectors) {
           const priceElements = row.querySelectorAll(selector);
           
@@ -252,10 +256,17 @@ async function extractBookingRoomData(page) {
             
             if (priceMatch) {
               const extractedPrice = parseInt(priceMatch[1].replace(',', ''));
-              if (extractedPrice >= 100 && extractedPrice <= 5000) {
-                price = extractedPrice;
-                console.log(`✅ Found price for ${roomName}: £${price} using selector ${selector}`);
-                break;
+              if (extractedPrice >= 200 && extractedPrice <= 3000) {
+                // Check if this price element comes BEFORE any "includes taxes" text
+                const parentText = priceEl.closest('td')?.textContent || priceEl.parentElement?.textContent || '';
+                const priceIndex = parentText.indexOf('£' + priceMatch[1]);
+                const taxesIndex = parentText.toLowerCase().indexOf('includes taxes');
+                
+                if (taxesIndex === -1 || priceIndex < taxesIndex) {
+                  price = extractedPrice;
+                  console.log(`✅ Found main display price for ${roomName}: £${price} using selector ${selector}`);
+                  break;
+                }
               }
             }
           }
@@ -263,32 +274,71 @@ async function extractBookingRoomData(page) {
           if (price) break;
         }
         
-        // If no price found in row, try looking in nearby elements
+        // Method 2: If no price found, look specifically in the "Today's price" column
         if (!price) {
-          console.log(`🔍 No price in row for ${roomName}, trying broader search...`);
+          // Look for elements that might be in the price column
+          const todaysPriceElements = row.querySelectorAll('td:nth-child(3), td:nth-child(4), .hprt-price-price-current');
           
-          // Look for any price elements that might be associated with this room
-          const allPriceElements = document.querySelectorAll('.prco-valign-middle-helper');
-          
-          for (const priceEl of allPriceElements) {
-            const priceText = priceEl.textContent;
-            const priceMatch = priceText.match(/£\s*(\d{1,4}(?:,\d{3})*)/);
+          for (const col of todaysPriceElements) {
+            const colText = col.textContent;
+            const priceMatch = colText.match(/£\s*(\d{1,4}(?:,\d{3})*)/);
             
             if (priceMatch) {
               const extractedPrice = parseInt(priceMatch[1].replace(',', ''));
-              if (extractedPrice >= 100 && extractedPrice <= 5000) {
-                // Check if this price element is reasonably close to our room element
-                const rect1 = roomLink.getBoundingClientRect();
-                const rect2 = priceEl.getBoundingClientRect();
-                const distance = Math.abs(rect1.top - rect2.top);
-                
-                if (distance < 100) { // Within 100px vertically
+              if (extractedPrice >= 200 && extractedPrice <= 3000) {
+                // Make sure this is the main price, not a detail price
+                const beforeTaxes = colText.split('includes taxes')[0] || colText.split('Includes taxes')[0] || colText;
+                if (beforeTaxes.includes('£' + priceMatch[1])) {
                   price = extractedPrice;
-                  console.log(`✅ Found nearby price for ${roomName}: £${price} (distance: ${distance}px)`);
+                  console.log(`✅ Found price in Today's price column for ${roomName}: £${price}`);
                   break;
                 }
               }
             }
+          }
+        }
+        
+        // Method 3: Enhanced fallback - look for the largest/most prominent price
+        if (!price) {
+          console.log(`🔍 No main price found for ${roomName}, trying enhanced search...`);
+          
+          // Get all price elements in the row and pick the most likely candidate
+          const allPricesInRow = [];
+          const allElements = row.querySelectorAll('*');
+          
+          for (const el of allElements) {
+            const text = el.textContent;
+            const priceMatch = text.match(/£\s*(\d{1,4}(?:,\d{3})*)/);
+            
+            if (priceMatch) {
+              const extractedPrice = parseInt(priceMatch[1].replace(',', ''));
+              if (extractedPrice >= 200 && extractedPrice <= 3000) {
+                // Check if this looks like a main price (bigger font, not in small text)
+                const computedStyle = window.getComputedStyle(el);
+                const fontSize = parseFloat(computedStyle.fontSize);
+                const fontWeight = computedStyle.fontWeight;
+                
+                allPricesInRow.push({
+                  price: extractedPrice,
+                  element: el,
+                  fontSize: fontSize,
+                  fontWeight: fontWeight,
+                  text: text
+                });
+              }
+            }
+          }
+          
+          if (allPricesInRow.length > 0) {
+            // Sort by font size (largest first) and font weight
+            allPricesInRow.sort((a, b) => {
+              if (a.fontSize !== b.fontSize) return b.fontSize - a.fontSize;
+              return (b.fontWeight === 'bold' || parseInt(b.fontWeight) > 400 ? 1 : 0) - 
+                     (a.fontWeight === 'bold' || parseInt(a.fontWeight) > 400 ? 1 : 0);
+            });
+            
+            price = allPricesInRow[0].price;
+            console.log(`✅ Found most prominent price for ${roomName}: £${price} (font: ${allPricesInRow[0].fontSize}px, weight: ${allPricesInRow[0].fontWeight})`);
           }
         }
         
